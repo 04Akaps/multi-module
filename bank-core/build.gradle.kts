@@ -4,4 +4,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework:spring-tx")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
+    implementation("org.redisson:redisson-spring-boot-starter:3.24.3")
+    implementation("io.micrometer:micrometer-core")
 }

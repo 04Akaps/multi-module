@@ -30,72 +30,46 @@ spring:
     scheduling:
       pool:
         size: 5
+  redis:
+    host: localhost
+    port: 6379
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+
+  redisson:
+    config: |
+      singleServerConfig:
+        address: "redis://localhost:6379"
+        connectionPoolSize: 8
+        database: 0
+        clientName: bank-app
 
 server:
   port: 9091
 
 logging:
   level:
-    com.example.bank.cqrs.view: DEBUG
-    com.example.bank.event: DEBUG
-    com.example.bank.event.listener: INFO
-    com.example.bank.event.publisher: INFO
-    com.example.bank.monitoring: INFO
-    org.springframework.transaction: DEBUG
-    org.springframework.retry: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{eventId:-}] %logger{36} - %msg%n"
+    com.example.bank: INFO
+    com.example.bank.lock: DEBUG
+    org.redisson: INFO
   
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
-      base-path: /actuator
-  endpoint:
-    health:
-      show-details: always
-    metrics:
-      enabled: true
+        include: health,metrics,prometheus
   metrics:
     export:
       prometheus:
         enabled: true
-    distribution:
-      percentiles-histogram:
-        http.server.requests: true
-        bank.event.processing.time: true
-        bank.api.response.time: true
-      percentiles:
-        http.server.requests: 0.5, 0.95, 0.99
-        bank.event.processing.time: 0.5, 0.95, 0.99
-        bank.api.response.time: 0.5, 0.95, 0.99
-      slo:
-        http.server.requests: 10ms, 50ms, 100ms, 200ms, 500ms
-        bank.api.response.time: 10ms, 50ms, 100ms, 200ms, 500ms
 
 bank:
-  event:
-    processing:
-      retry:
-        max-attempts: 3
-        initial-delay: 1000
-        multiplier: 2.0
-        max-delay: 10000
-      dead-letter:
-        enabled: true
-        table-name: failed_events
-      async:
-        enabled: true
-        core-pool-size: 8
-        max-pool-size: 20
-        queue-capacity: 100
-        keep-alive-seconds: 60
-    monitoring:
-      metrics:
-        enabled: true
-        prefix: "bank"
-      notification:
-        enabled: true
-        admin-email: "admin@bank.com"
-        slack-webhook: "" 
+  lock:
+    timeout: 30000      # 30초 - 더 긴 대기 시간
+    lease-time: 15000   # 15초 - 락 보유 최대 시간
+    retry-interval: 100
+    max-retry-attempts: 50 

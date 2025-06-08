@@ -14,6 +14,7 @@ import com.example.bank.event.publisher.DomainEventPublisher
 import com.example.bank.exception.AccountNotFoundException
 import com.example.bank.exception.InsufficientFundsException
 import com.example.bank.exception.InvalidAmountException
+import com.example.bank.lock.DistributedLockService
 import com.example.bank.monitoring.BankMetrics
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
@@ -26,7 +27,8 @@ class AccountWriteService(
     private val accountRepository: AccountRepository,
     private val transactionRepository: TransactionRepository,
     private val eventPublisher: DomainEventPublisher,
-    private val bankMetrics: BankMetrics
+    private val bankMetrics: BankMetrics,
+    private val distributedLockService: DistributedLockService
 ) {
     private val logger = LoggerFactory.getLogger(AccountWriteService::class.java)
 
@@ -79,28 +81,30 @@ class AccountWriteService(
 
     fun deposit(account : String, amount :BigDecimal) : ResponseEntity<ApiResponse<AccountView>> {
         return try {
+            // 분산 락을 사용하여 동시성 제어
+            val (updatedAccount, transaction) = distributedLockService.executeWithAccountLock(account) {
+                txAdvice.run {
+                    if (amount <= BigDecimal.ZERO) {
+                        throw InvalidAmountException("Deposit amount must be positive")
+                    }
 
-            val (updatedAccount, transaction) = txAdvice.run {
-                if (amount <= BigDecimal.ZERO) {
-                    throw InvalidAmountException("Deposit amount must be positive")
-                }
+                    val account = accountRepository.findByAccountNumber(account)
+                        ?: throw AccountNotFoundException(account)
 
-                val account = accountRepository.findByAccountNumber(account)
-                    ?: throw AccountNotFoundException(account)
+                    account.balance = account.balance.add(amount)
 
-                account.balance = account.balance.add(amount)
+                    val transaction = Transaction(
+                        account = account,
+                        amount = amount,
+                        type = TransactionType.DEPOSIT,
+                        description = "Deposit of ${amount}"
+                    )
+                    val savedTransaction = transactionRepository.save(transaction)
+                    val savedAccount = accountRepository.save(account)
 
-                val transaction = Transaction(
-                    account = account,
-                    amount = amount,
-                    type = TransactionType.DEPOSIT,
-                    description = "Deposit of ${amount}"
-                )
-                val savedTransaction = transactionRepository.save(transaction)
-                val savedAccount = accountRepository.save(account)
-
-                Pair(savedAccount, savedTransaction)
-            }!!
+                    Pair(savedAccount, savedTransaction)
+                }!!
+            }
 
             bankMetrics.incrementTransaction("DEPOSIT")
             bankMetrics.recordTransactionAmount(amount, "DEPOSIT")
@@ -136,32 +140,34 @@ class AccountWriteService(
 
     fun withDraw(accountNumber : String, amount : BigDecimal) : ResponseEntity<ApiResponse<AccountView>> {
         return try {
+            // 분산 락을 사용하여 동시성 제어
+            val (updatedAccount, transaction) = distributedLockService.executeWithAccountLock(accountNumber) {
+                txAdvice.run {
+                    if (amount <= BigDecimal.ZERO) {
+                        throw InvalidAmountException("Withdrawal amount must be positive")
+                    }
 
-            val (updatedAccount, transaction) = txAdvice.run {
-                if (amount <= BigDecimal.ZERO) {
-                    throw InvalidAmountException("Withdrawal amount must be positive")
-                }
+                    val account = accountRepository.findByAccountNumber(accountNumber)
+                        ?: throw AccountNotFoundException(accountNumber)
 
-                val account = accountRepository.findByAccountNumber(accountNumber)
-                    ?: throw AccountNotFoundException(accountNumber)
+                    if (account.balance < amount) {
+                        throw InsufficientFundsException(account.balance.toString(), amount.toString())
+                    }
 
-                if (account.balance < amount) {
-                    throw InsufficientFundsException(account.balance.toString(), amount.toString())
-                }
+                    account.balance = account.balance.subtract(amount)
 
-                account.balance = account.balance.subtract(amount)
+                    val transaction = Transaction(
+                        account = account,
+                        amount = amount,
+                        type = TransactionType.WITHDRAWAL,
+                        description = "Withdrawal of ${amount}"
+                    )
+                    val savedTransaction = transactionRepository.save(transaction)
+                    val savedAccount = accountRepository.save(account)
 
-                val transaction = Transaction(
-                    account = account,
-                    amount = amount,
-                    type = TransactionType.WITHDRAWAL,
-                    description = "Withdrawal of ${amount}"
-                )
-                val savedTransaction = transactionRepository.save(transaction)
-                val savedAccount = accountRepository.save(account)
-
-                Pair(savedAccount, savedTransaction)
-            }!!
+                    Pair(savedAccount, savedTransaction)
+                }!!
+            }
 
             bankMetrics.incrementTransaction("WITHDRAWAL")
             bankMetrics.recordTransactionAmount(amount, "WITHDRAWAL")
@@ -197,45 +203,48 @@ class AccountWriteService(
 
     fun transfer(from : String, to : String, amount :BigDecimal) : ResponseEntity<ApiResponse<String>> {
         return try {
-            val result = txAdvice.run {
-                if (amount <= BigDecimal.ZERO) {
-                    throw InvalidAmountException("Transfer amount must be positive")
-                }
+            // 송금 시 데드락 방지를 위한 분산 락 적용
+            val result = distributedLockService.executeWithTransferLock(from, to) {
+                txAdvice.run {
+                    if (amount <= BigDecimal.ZERO) {
+                        throw InvalidAmountException("Transfer amount must be positive")
+                    }
 
-                val fromAccount = accountRepository.findByAccountNumber(from)
-                    ?: throw AccountNotFoundException(from)
-                val toAccount = accountRepository.findByAccountNumber(to)
-                    ?: throw AccountNotFoundException(to)
+                    val fromAccount = accountRepository.findByAccountNumber(from)
+                        ?: throw AccountNotFoundException(from)
+                    val toAccount = accountRepository.findByAccountNumber(to)
+                        ?: throw AccountNotFoundException(to)
 
-                if (fromAccount.balance < amount) {
-                    throw InsufficientFundsException(fromAccount.balance.toString(), amount.toString())
-                }
+                    if (fromAccount.balance < amount) {
+                        throw InsufficientFundsException(fromAccount.balance.toString(), amount.toString())
+                    }
 
-                fromAccount.balance = fromAccount.balance.subtract(amount)
-                toAccount.balance = toAccount.balance.add(amount)
+                    fromAccount.balance = fromAccount.balance.subtract(amount)
+                    toAccount.balance = toAccount.balance.add(amount)
 
-                val fromTransaction = Transaction(
-                    account = fromAccount,
-                    amount = amount,
-                    type = TransactionType.TRANSFER,
-                    description = "Transfer to ${to}"
-                )
+                    val fromTransaction = Transaction(
+                        account = fromAccount,
+                        amount = amount,
+                        type = TransactionType.TRANSFER,
+                        description = "Transfer to ${to}"
+                    )
 
-                val toTransaction = Transaction(
-                    account = toAccount,
-                    amount = amount,
-                    type = TransactionType.TRANSFER,
-                    description = "Transfer from ${from}"
-                )
+                    val toTransaction = Transaction(
+                        account = toAccount,
+                        amount = amount,
+                        type = TransactionType.TRANSFER,
+                        description = "Transfer from ${from}"
+                    )
 
-                val savedFromTransaction = transactionRepository.save(fromTransaction)
-                val savedToTransaction = transactionRepository.save(toTransaction)
+                    val savedFromTransaction = transactionRepository.save(fromTransaction)
+                    val savedToTransaction = transactionRepository.save(toTransaction)
 
-                val savedFromAccount = accountRepository.save(fromAccount)
-                val savedToAccount = accountRepository.save(toAccount)
+                    val savedFromAccount = accountRepository.save(fromAccount)
+                    val savedToAccount = accountRepository.save(toAccount)
 
-                TransferResult(savedFromTransaction, savedToTransaction, savedFromAccount, savedToAccount)
-            }!!
+                    TransferResult(savedFromTransaction, savedToTransaction, savedFromAccount, savedToAccount)
+                }!!
+            }
 
             bankMetrics.incrementTransaction("TRANSFER")
             bankMetrics.incrementTransaction("TRANSFER")

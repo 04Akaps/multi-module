@@ -30,8 +30,6 @@ class InvalidAmountException(
     message: String = "Invalid transaction amount"
 ) : BankingException(message)
 
-
-
 /**
  * 계좌 번호가 중복되는 경우
  */

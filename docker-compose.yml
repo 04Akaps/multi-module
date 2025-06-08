@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: bank-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - bank-monitoring
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     container_name: bank-prometheus
@@ -45,6 +57,8 @@ networks:
     driver: bridge
 
 volumes:
+  redis-data:
+    driver: local
   prometheus-data:
     driver: local
   grafana-data:

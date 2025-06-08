@@ -81,6 +81,23 @@ class BankMetrics(private val meterRegistry: MeterRegistry) {
             .record(duration)
     }
     
+    // 분산 락 관련 메트릭
+    fun incrementLockAcquisitionFailure(lockKey: String) {
+        Counter.builder("bank.lock.acquisition.failed")
+            .description("Number of failed lock acquisitions")
+            .tag("lock_key", lockKey)
+            .register(meterRegistry)
+            .increment()
+    }
+    
+    fun incrementLockAcquisitionSuccess(lockKey: String) {
+        Counter.builder("bank.lock.acquisition.success")
+            .description("Number of successful lock acquisitions")
+            .tag("lock_key", lockKey)
+            .register(meterRegistry)
+            .increment()
+    }
+    
     // API 관련 메트릭
     fun recordApiResponseTime(duration: Duration, endpoint: String, method: String) {
         Timer.builder("bank.api.response.time")

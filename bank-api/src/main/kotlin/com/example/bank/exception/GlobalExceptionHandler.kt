@@ -121,6 +121,22 @@ class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(response)
     }
 
+    @ExceptionHandler(LockAcquisitionException::class)
+    fun handleLockAcquisitionException(
+        ex: LockAcquisitionException,
+        request: WebRequest
+    ): ResponseEntity<ApiResponse<Nothing>> {
+        logger.warn("Failed to acquire distributed lock: {}", ex.message)
+        
+        val response = ApiResponse.errorException<Nothing>(
+            message = ex.message ?: "System is busy, please try again later",
+            errorCode = "LOCK_ACQUISITION_FAILED",
+            path = getPath(request)
+        )
+        
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(response)
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun handleMethodArgumentNotValidException(
         ex: MethodArgumentNotValidException,
