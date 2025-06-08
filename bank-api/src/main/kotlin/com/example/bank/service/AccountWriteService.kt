@@ -14,6 +14,7 @@ import com.example.bank.event.publisher.DomainEventPublisher
 import com.example.bank.exception.AccountNotFoundException
 import com.example.bank.exception.InsufficientFundsException
 import com.example.bank.exception.InvalidAmountException
+import com.example.bank.monitoring.BankMetrics
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
@@ -24,7 +25,8 @@ class AccountWriteService(
     private val txAdvice: TxAdvice,
     private val accountRepository: AccountRepository,
     private val transactionRepository: TransactionRepository,
-    private val eventPublisher: DomainEventPublisher
+    private val eventPublisher: DomainEventPublisher,
+    private val bankMetrics: BankMetrics
 ) {
     private val logger = LoggerFactory.getLogger(AccountWriteService::class.java)
 
@@ -45,7 +47,10 @@ class AccountWriteService(
                 accountRepository.save(account)
             }!!
 
-            eventPublisher.publish(
+            bankMetrics.incrementAccountCreated()
+            bankMetrics.updateAccountCount(accountRepository.count())
+
+            eventPublisher.publishAsync(
                 AccountCreatedEvent(
                     accountId = account.id,
                     accountNumber = account.accountNumber,
@@ -97,7 +102,10 @@ class AccountWriteService(
                 Pair(savedAccount, savedTransaction)
             }!!
 
-            eventPublisher.publish(
+            bankMetrics.incrementTransaction("DEPOSIT")
+            bankMetrics.recordTransactionAmount(amount, "DEPOSIT")
+
+            eventPublisher.publishAsync(
                 TransactionCreatedEvent(
                     transactionId = transaction.id,
                     accountId = updatedAccount.id,
@@ -109,7 +117,7 @@ class AccountWriteService(
             )
 
             ApiResponse.success(
-                data =AccountView(
+                data = AccountView(
                     id = updatedAccount.id,
                     accountNumber = updatedAccount.accountNumber,
                     balance = updatedAccount.balance,
@@ -155,7 +163,10 @@ class AccountWriteService(
                 Pair(savedAccount, savedTransaction)
             }!!
 
-            eventPublisher.publish(
+            bankMetrics.incrementTransaction("WITHDRAWAL")
+            bankMetrics.recordTransactionAmount(amount, "WITHDRAWAL")
+
+            eventPublisher.publishAsync(
                 TransactionCreatedEvent(
                     transactionId = transaction.id,
                     accountId = updatedAccount.id,
@@ -226,25 +237,28 @@ class AccountWriteService(
                 TransferResult(savedFromTransaction, savedToTransaction, savedFromAccount, savedToAccount)
             }!!
 
-            eventPublisher.publish(
-                TransactionCreatedEvent(
-                    transactionId = result.fromTransaction.id,
-                    accountId = result.fromAccount.id,
-                    type = TransactionType.TRANSFER,
-                    amount = amount,
-                    description = "Transfer to ${to}",
-                    balanceAfter = result.fromAccount.balance
-                )
-            )
+            bankMetrics.incrementTransaction("TRANSFER")
+            bankMetrics.incrementTransaction("TRANSFER")
+            bankMetrics.recordTransactionAmount(amount, "TRANSFER")
 
-            eventPublisher.publish(
-                TransactionCreatedEvent(
-                    transactionId = result.toTransaction.id,
-                    accountId = result.toAccount.id,
-                    type = TransactionType.TRANSFER,
-                    amount = amount,
-                    description = "Transfer from ${from}",
-                    balanceAfter = result.toAccount.balance
+            eventPublisher.publishAllAsync(
+                listOf(
+                    TransactionCreatedEvent(
+                        transactionId = result.fromTransaction.id,
+                        accountId = result.fromAccount.id,
+                        type = TransactionType.TRANSFER,
+                        amount = amount,
+                        description = "Transfer to ${to}",
+                        balanceAfter = result.fromAccount.balance
+                    ),
+                    TransactionCreatedEvent(
+                        transactionId = result.toTransaction.id,
+                        accountId = result.toAccount.id,
+                        type = TransactionType.TRANSFER,
+                        amount = amount,
+                        description = "Transfer from ${from}",
+                        balanceAfter = result.toAccount.balance
+                    )
                 )
             )
             

@@ -27,6 +27,9 @@ spring:
         queue-capacity: 100
         keep-alive: 60s
       thread-name-prefix: DomainEvent-
+    scheduling:
+      pool:
+        size: 5
 
 server:
   port: 9091
@@ -35,4 +38,64 @@ logging:
   level:
     com.example.bank.cqrs.view: DEBUG
     com.example.bank.event: DEBUG
-    org.springframework.transaction: DEBUG 
+    com.example.bank.event.listener: INFO
+    com.example.bank.event.publisher: INFO
+    com.example.bank.monitoring: INFO
+    org.springframework.transaction: DEBUG
+    org.springframework.retry: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{eventId:-}] %logger{36} - %msg%n"
+  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+    metrics:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        bank.event.processing.time: true
+        bank.api.response.time: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+        bank.event.processing.time: 0.5, 0.95, 0.99
+        bank.api.response.time: 0.5, 0.95, 0.99
+      slo:
+        http.server.requests: 10ms, 50ms, 100ms, 200ms, 500ms
+        bank.api.response.time: 10ms, 50ms, 100ms, 200ms, 500ms
+
+bank:
+  event:
+    processing:
+      retry:
+        max-attempts: 3
+        initial-delay: 1000
+        multiplier: 2.0
+        max-delay: 10000
+      dead-letter:
+        enabled: true
+        table-name: failed_events
+      async:
+        enabled: true
+        core-pool-size: 8
+        max-pool-size: 20
+        queue-capacity: 100
+        keep-alive-seconds: 60
+    monitoring:
+      metrics:
+        enabled: true
+        prefix: "bank"
+      notification:
+        enabled: true
+        admin-email: "admin@bank.com"
+        slack-webhook: "" 

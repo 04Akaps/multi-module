@@ -9,10 +9,16 @@ import com.example.bank.domain.repository.AccountReadViewRepository
 import com.example.bank.domain.repository.AccountRepository
 import com.example.bank.domain.repository.TransactionReadViewRepository
 import com.example.bank.domain.repository.TransactionRepository
+import com.example.bank.monitoring.BankMetrics
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
+import org.springframework.scheduling.annotation.Async
+import org.springframework.retry.annotation.Backoff
+import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
 
 @Component
@@ -21,12 +27,18 @@ open class EventReader(
     private val transactionReadViewRepository: TransactionReadViewRepository,
     private val accountRepository: AccountRepository,
     private val transactionRepository: TransactionRepository,
-    private val txAdvice: TxAdvice
+    private val txAdvice: TxAdvice,
+    private val bankMetrics: BankMetrics
 ) {
     private val logger = LoggerFactory.getLogger(EventReader::class.java)
 
     @EventListener
+    @Async("taskExecutor")
+    @Retryable(value = [Exception::class], maxAttempts = 3, backoff = Backoff(delay = 1000))
     open fun handleAccountCreated(event: AccountCreatedEvent) {
+        val startTime = Instant.now()
+        val eventType = "AccountCreatedEvent"
+        
         logger.info("Projecting AccountCreatedEvent to read model: accountId=${event.accountId}")
 
         try {
@@ -49,14 +61,29 @@ open class EventReader(
                 accountReadViewRepository.save(accountReadView)
                 logger.info("AccountReadView created successfully: ${accountReadView.accountNumber}")
             }
+            
+            // 성공 메트릭 기록
+            val duration = Duration.between(startTime, Instant.now())
+            bankMetrics.recordEventProcessingTime(duration, eventType)
+            bankMetrics.incrementEventProcessed(eventType)
+            
         } catch (e: Exception) {
-            logger.error("Failed to project AccountCreatedEvent: ${event.accountId}", e)
-            throw e
+            logger.error("Failed to project AccountCreatedEvent: ${event.accountId}, eventId: ${event.eventId}", e)
+            
+            // 실패 메트릭 기록
+            bankMetrics.incrementEventFailed(eventType)
+            
+            throw e // 재시도를 위해 예외 재발생
         }
     }
 
     @EventListener
+    @Async("taskExecutor")
+    @Retryable(value = [Exception::class], maxAttempts = 3, backoff = Backoff(delay = 1000))
     open fun handleTransactionCreated(event: TransactionCreatedEvent) {
+        val startTime = Instant.now()
+        val eventType = "TransactionCreatedEvent"
+        
         logger.info("Projecting TransactionCreatedEvent to read model: transactionId=${event.transactionId}")
 
         try {
@@ -102,9 +129,19 @@ open class EventReader(
                 accountReadViewRepository.save(updatedAccountReadView)
                 logger.info("AccountReadView updated successfully: ${account.accountNumber}")
             }
+            
+            // 성공 메트릭 기록
+            val duration = Duration.between(startTime, Instant.now())
+            bankMetrics.recordEventProcessingTime(duration, eventType)
+            bankMetrics.incrementEventProcessed(eventType)
+            
         } catch (e: Exception) {
-            logger.error("Failed to project TransactionCreatedEvent: ${event.transactionId}", e)
-            throw e
+            logger.error("Failed to project TransactionCreatedEvent: ${event.transactionId}, eventId: ${event.eventId}", e)
+            
+            // 실패 메트릭 기록
+            bankMetrics.incrementEventFailed(eventType)
+            
+            throw e // 재시도를 위해 예외 재발생
         }
     }
 }

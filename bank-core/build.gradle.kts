@@ -1,5 +1,4 @@
 dependencies {
-    implementation(project(":bank-event"))
     implementation(project(":bank-domain"))
     implementation("org.springframework.boot:spring-boot-starter")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
