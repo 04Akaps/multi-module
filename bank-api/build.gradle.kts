@@ -13,6 +13,14 @@ dependencies {
     implementation("com.h2database:h2")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     
+    // Circuit Breaker
+    implementation("io.github.resilience4j:resilience4j-spring-boot2:2.1.0")
+    implementation("io.github.resilience4j:resilience4j-circuitbreaker:2.1.0")
+    implementation("io.github.resilience4j:resilience4j-kotlin:2.1.0")
+    
+    // API Documentation
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0")
+    
     // 테스트 의존성
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")

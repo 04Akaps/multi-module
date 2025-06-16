@@ -1,138 +1,102 @@
 package com.example.bank.service
 
 import com.example.bank.common.ApiResponse
-import com.example.bank.common.TxAdvice
 import com.example.bank.domain.dto.AccountBalanceView
 import com.example.bank.domain.dto.AccountView
 import com.example.bank.domain.dto.TransactionView
-import com.example.bank.domain.repository.AccountReadViewRepository
-import com.example.bank.domain.repository.TransactionReadViewRepository
-import com.example.bank.exception.AccountNotFoundException
+import com.example.bank.domain.model.Account
+import com.example.bank.domain.model.Transaction
+import com.example.bank.domain.repository.AccountRepository
+import com.example.bank.domain.repository.TransactionRepository
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
-
+import org.springframework.transaction.annotation.Transactional
+import java.time.Duration
+import java.util.function.Supplier
 
 @Service
 class AccountReadService(
-    private val accountReadViewRepository: AccountReadViewRepository,
-    private val transactionReadViewRepository: TransactionReadViewRepository,
-    private val txAdvice: TxAdvice,
+    private val accountRepository: AccountRepository,
+    private val transactionRepository: TransactionRepository
 ) {
     private val logger = LoggerFactory.getLogger(AccountReadService::class.java)
+    private val circuitBreakerRegistry = CircuitBreakerRegistry.of(
+        CircuitBreakerConfig.custom()
+            .failureRateThreshold(50f)
+            .waitDurationInOpenState(Duration.ofSeconds(60))
+            .permittedNumberOfCallsInHalfOpenState(2)
+            .slidingWindowSize(2)
+            .build()
+    )
 
-    fun getAccount(account : String) : ResponseEntity<ApiResponse<AccountView>> {
-        return try {
+    private val accountServiceBreaker = circuitBreakerRegistry.circuitBreaker("accountReadService")
 
-            val result = txAdvice.readOnly {
-                val accountReadView = accountReadViewRepository.findByAccountNumber(account)
-                    .orElseThrow { AccountNotFoundException(account) }
+    @Transactional(readOnly = true)
+    fun getAccount(accountNumber: String): ResponseEntity<ApiResponse<AccountView>> {
+        return executeWithCircuitBreaker(accountServiceBreaker) {
+            logger.info("Getting account: $accountNumber")
+            val account = accountRepository.findByAccountNumber(accountNumber)
+                ?: return@executeWithCircuitBreaker ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Account not found"))
 
-                AccountView(
-                    id = accountReadView.id,
-                    accountNumber = accountReadView.accountNumber,
-                    balance = accountReadView.balance,
-                    accountHolderName = accountReadView.accountHolderName,
-                    createdAt = accountReadView.createdAt
-                )
-            }!!
-
-            ApiResponse.success(
-                data = result,
-                message = "Account retrieved successfully"
-            )
-        } catch (e: Exception) {
-            logger.error("Error getting account: $account", e)
-            ApiResponse.error<AccountView>(
-                message = "Failed to get account: ${e.message}"
-            )
+            ResponseEntity.ok(ApiResponse.success(AccountView.from(account)))
         }
     }
 
-    fun transactionHistory(account : String, limit : Int?): ResponseEntity<ApiResponse<List<TransactionView>>>  {
-        return try {
+    @Transactional(readOnly = true)
+    fun transactionHistory(accountNumber: String, limit: Int?): ResponseEntity<ApiResponse<List<TransactionView>>> {
+        return executeWithCircuitBreaker(accountServiceBreaker) {
+            logger.info("Getting transaction history for account: $accountNumber")
+            val account = accountRepository.findByAccountNumber(accountNumber)
+                ?: return@executeWithCircuitBreaker ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Account not found"))
 
-            val result = txAdvice.readOnly {
-                val transactionReadViews = transactionReadViewRepository.findByAccountNumberOrderByCreatedAtDesc(account)
-                    .let { if (limit != null) it.take(limit) else it }
+            val transactions = if (limit != null) {
+                transactionRepository.findTopByAccountOrderByTimestampDesc(account, limit)
+            } else {
+                transactionRepository.findByAccountOrderByTimestampDesc(account)
+            }
 
-                transactionReadViews.map { transactionReadView ->
-                    TransactionView(
-                        id = transactionReadView.id,
-                        accountId = transactionReadView.accountId,
-                        accountNumber = transactionReadView.accountNumber,
-                        amount = transactionReadView.amount,
-                        type = transactionReadView.type,
-                        description = transactionReadView.description,
-                        createdAt = transactionReadView.createdAt,
-                        balanceAfter = transactionReadView.balanceAfter
-                    )
-                }
-            }!!
-
-            ApiResponse.success(
-                data = result,
-                message = "Transaction history retrieved successfully"
-            )
-        } catch (e: Exception) {
-            logger.error("Error getting transaction history for account: $account", e)
-            ApiResponse.error<List<TransactionView>>(
-                message = "Failed to get transaction history: ${e.message}"
-            )
+            ResponseEntity.ok(ApiResponse.success(transactions.map { TransactionView.from(it) }))
         }
     }
 
-    fun accountBalance(account : String) : ResponseEntity<ApiResponse<AccountBalanceView>> {
-        return try {
+    @Transactional(readOnly = true)
+    fun accountBalance(accountNumber: String): ResponseEntity<ApiResponse<AccountBalanceView>> {
+        return executeWithCircuitBreaker(accountServiceBreaker) {
+            logger.info("Getting balance for account: $accountNumber")
+            val account = accountRepository.findByAccountNumber(accountNumber)
+                ?: return@executeWithCircuitBreaker ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Account not found"))
 
-            val result =  txAdvice.readOnly {
-                val accountReadView = accountReadViewRepository.findByAccountNumber(account)
-                    .orElseThrow { AccountNotFoundException(account) }
-
-                AccountBalanceView(
-                    accountNumber = accountReadView.accountNumber,
-                    balance = accountReadView.balance,
-                    accountHolderName = accountReadView.accountHolderName,
-                    lastUpdated = accountReadView.lastUpdatedAt
-                )
-            }!!
-
-            ApiResponse.success(
-                data = result,
-                message = "Account balance retrieved successfully"
-            )
-        } catch (e: Exception) {
-            logger.error("Error getting balance for account: $account", e)
-            ApiResponse.error<AccountBalanceView>(
-                message = "Failed to get account balance: ${e.message}"
-            )
+            ResponseEntity.ok(ApiResponse.success(AccountBalanceView.from(account)))
         }
     }
 
-    fun allAccount() : ResponseEntity<ApiResponse<List<AccountView>>> {
+    @Transactional(readOnly = true)
+    fun allAccount(): ResponseEntity<ApiResponse<List<AccountView>>> {
+        return executeWithCircuitBreaker(accountServiceBreaker) {
+            logger.info("Getting all accounts")
+            val accounts = accountRepository.findAll()
+            ResponseEntity.ok(ApiResponse.success(accounts.map { AccountView.from(it) }))
+        }
+    }
+
+    private fun <T> executeWithCircuitBreaker(
+        circuitBreaker: CircuitBreaker,
+        supplier: () -> ResponseEntity<ApiResponse<T>>
+    ): ResponseEntity<ApiResponse<T>> {
         return try {
-
-            val result =  txAdvice.readOnly {
-                accountReadViewRepository.findAll().map { accountReadView ->
-                    AccountView(
-                        id = accountReadView.id,
-                        accountNumber = accountReadView.accountNumber,
-                        balance = accountReadView.balance,
-                        accountHolderName = accountReadView.accountHolderName,
-                        createdAt = accountReadView.createdAt
-                    )
-                }
-            }!!
-
-            ApiResponse.success(
-                data = result,
-                message = "All accounts retrieved successfully"
-            )
+            CircuitBreaker.decorateSupplier(circuitBreaker, Supplier { supplier() }).get()
         } catch (e: Exception) {
-            logger.error("Error getting all accounts", e)
-            ApiResponse.error<List<AccountView>>(
-                message = "Failed to get accounts: ${e.message}"
-            )
+            logger.error("Circuit breaker triggered for operation", e)
+            ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.error("Service temporarily unavailable"))
         }
     }
 }

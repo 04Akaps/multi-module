@@ -16,6 +16,10 @@ import com.example.bank.exception.InsufficientFundsException
 import com.example.bank.exception.InvalidAmountException
 import com.example.bank.lock.DistributedLockService
 import com.example.bank.monitoring.BankMetrics
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
+import io.github.resilience4j.retry.annotation.Retry
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
@@ -36,9 +40,10 @@ class AccountWriteService(
         return System.currentTimeMillis().toString()
     }
 
+    @CircuitBreaker(name = "accountService", fallbackMethod = "createAccountFallback")
+    @Retry(name = "accountService")
     fun createAccount(name: String, balance : BigDecimal) : ResponseEntity<ApiResponse<AccountView>> {
         return try {
-
             val account = txAdvice.run {
                 val accountNumber = generateAccountNumber()
                 val account = Account(
@@ -79,6 +84,8 @@ class AccountWriteService(
         }
     }
 
+    @CircuitBreaker(name = "accountService", fallbackMethod = "depositFallback")
+    @Retry(name = "accountService")
     fun deposit(account : String, amount :BigDecimal) : ResponseEntity<ApiResponse<AccountView>> {
         return try {
             // 분산 락을 사용하여 동시성 제어
@@ -138,6 +145,8 @@ class AccountWriteService(
         }
     }
 
+    @CircuitBreaker(name = "accountService", fallbackMethod = "withdrawFallback")
+    @Retry(name = "accountService")
     fun withDraw(accountNumber : String, amount : BigDecimal) : ResponseEntity<ApiResponse<AccountView>> {
         return try {
             // 분산 락을 사용하여 동시성 제어
@@ -201,6 +210,8 @@ class AccountWriteService(
         }
     }
 
+    @CircuitBreaker(name = "transactionService", fallbackMethod = "transferFallback")
+    @Retry(name = "accountService")
     fun transfer(from : String, to : String, amount :BigDecimal) : ResponseEntity<ApiResponse<String>> {
         return try {
             // 송금 시 데드락 방지를 위한 분산 락 적용
@@ -289,5 +300,34 @@ class AccountWriteService(
         val fromAccount: Account,
         val toAccount: Account
     )
+
+    // Fallback methods
+    private fun createAccountFallback(name: String, balance: BigDecimal, ex: Exception): ResponseEntity<ApiResponse<AccountView>> {
+        logger.error("Fallback: Error creating account", ex)
+        return ApiResponse.error<AccountView>(
+            message = "Service temporarily unavailable. Please try again later."
+        )
+    }
+
+    private fun depositFallback(accountNumber: String, amount: BigDecimal, ex: Exception): ResponseEntity<ApiResponse<AccountView>> {
+        logger.error("Fallback: Error depositing to account", ex)
+        return ApiResponse.error<AccountView>(
+            message = "Service temporarily unavailable. Please try again later."
+        )
+    }
+
+    private fun withdrawFallback(accountNumber: String, amount: BigDecimal, ex: Exception): ResponseEntity<ApiResponse<AccountView>> {
+        logger.error("Fallback: Error withdrawing from account", ex)
+        return ApiResponse.error<AccountView>(
+            message = "Service temporarily unavailable. Please try again later."
+        )
+    }
+
+    private fun transferFallback(from: String, to: String, amount: BigDecimal, ex: Exception): ResponseEntity<ApiResponse<String>> {
+        logger.error("Fallback: Error transferring between accounts", ex)
+        return ApiResponse.error<String>(
+            message = "Service temporarily unavailable. Please try again later."
+        )
+    }
 }
 
